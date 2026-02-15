@@ -1,0 +1,400 @@
+name: Test Stalwart Installation Action
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  # Test basic installation without configuration
+  test-basic-install:
+    name: Basic Installation (No Config)
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl
+      
+      - name: Run basic installation
+        uses: ./
+        # No inputs - should install with defaults
+      
+      - name: Wait for service to fully start
+        run: |
+          echo "Waiting for Stalwart to fully initialize..."
+          sleep 15
+      
+      - name: Verify Stalwart service is running
+        run: |
+          sleep 10  # Give service time to start
+          
+          # Check if systemd is available
+          if command -v systemctl >/dev/null 2>&1 && systemctl --version >/dev/null 2>&1; then
+            echo "Checking service status with systemd..."
+            sudo systemctl status stalwart --no-pager || true
+            if sudo systemctl is-active --quiet stalwart; then
+              echo "✓ Stalwart service is running (systemd)"
+            else
+              echo "::warning::Stalwart service not active in systemd, checking process..."
+            fi
+          else
+            echo "::warning::systemd not available, checking process directly..."
+          fi
+          
+          # Check if process is running
+          if pgrep -x stalwart >/dev/null; then
+            echo "✓ Stalwart process is running"
+          else
+            echo "::error::Stalwart process is not running"
+            ps aux | grep stalwart || true
+            exit 1
+          fi
+      
+      - name: Check Stalwart binary
+        run: |
+          if [ ! -f /opt/stalwart/bin/stalwart ]; then
+            echo "::error::Stalwart binary not found"
+            exit 1
+          fi
+          /opt/stalwart/bin/stalwart --version
+      
+      - name: Test web admin accessibility
+        run: |
+          # Wait for API to be ready
+          for i in {1..30}; do
+            if curl -sf http://localhost:8080/login >/dev/null 2>&1; then
+              echo "✓ Web admin is accessible"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Web admin not accessible after 60 seconds"
+          exit 1
+
+  # Test full configuration with domains and users
+  test-full-config:
+    name: Full Configuration (Domains + Users)
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl
+      
+      - name: Install with full configuration
+        id: install
+        uses: ./
+        with:
+          domains: |
+            [
+              {
+                "name": "test1.local",
+                "description": "Primary test domain"
+              },
+              {
+                "name": "test2.local",
+                "description": "Secondary test domain"
+              }
+            ]
+          users: |
+            [
+              {
+                "email": "user1@test1.local",
+                "password": "UserPass123!",
+                "name": "Test User One",
+                "quota": 1073741824
+              },
+              {
+                "email": "user2@test1.local",
+                "password": "UserPass456!",
+                "name": "Test User Two",
+                "quota": 2147483648
+              },
+              {
+                "email": "admin@test2.local",
+                "password": "AdminUser789!",
+                "name": "Admin User",
+                "quota": 5368709120
+              }
+            ]
+      
+      - name: Wait for service to fully start
+        run: |
+          echo "Waiting for Stalwart to fully initialize..."
+          sleep 15
+      
+      - name: Verify service is running
+        run: |
+          # Check process
+          if ! pgrep -x stalwart >/dev/null; then
+            echo "::error::Stalwart process is not running"
+            echo "Process list:"
+            ps aux | grep stalwart || true
+            echo "PID file:"
+            cat /var/run/stalwart.pid 2>/dev/null || echo "No PID file"
+            echo "Logs:"
+            tail -50 /opt/stalwart/logs/*.log 2>/dev/null || true
+            exit 1
+          fi
+          echo "✓ Stalwart is running"
+      
+      - name: Verify service is accessible
+        run: |
+          # Wait for API to be ready
+          echo "Waiting for Stalwart API..."
+          for i in {1..30}; do
+            if curl -sf http://localhost:8080/login >/dev/null 2>&1; then
+              echo "✓ API is ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::API not accessible after 60 seconds"
+          exit 1
+      
+      - name: Verify domains and users were created
+        run: |
+          echo "=== Reading Admin Password ==="
+          if [ -f /tmp/stalwart_admin_password ]; then
+            ADMIN_PASSWORD=$(cat /tmp/stalwart_admin_password)
+            echo "✓ Admin password retrieved"
+          else
+            echo "::error::Admin password file not found"
+            exit 1
+          fi
+          
+          echo ""
+          echo "=== Verifying Domains ==="
+          DOMAINS_RESPONSE=$(curl -s -u "admin:$ADMIN_PASSWORD" \
+            "http://localhost:8080/api/principal?types=domain&limit=100")
+          
+          DOMAIN_COUNT=$(echo "$DOMAINS_RESPONSE" | jq '.data.total // 0')
+          echo "Total domains found: $DOMAIN_COUNT"
+          
+          # List domains
+          echo "$DOMAINS_RESPONSE" | jq -r '.data.items[] | "  - \(.name): \(.description // "No description")"'
+          
+          # Verify specific domains exist
+          if echo "$DOMAINS_RESPONSE" | jq -e '.data.items[] | select(.name == "test1.local")' >/dev/null; then
+            echo "✓ Domain test1.local exists"
+          else
+            echo "::error::Domain test1.local not found"
+            exit 1
+          fi
+          
+          if echo "$DOMAINS_RESPONSE" | jq -e '.data.items[] | select(.name == "test2.local")' >/dev/null; then
+            echo "✓ Domain test2.local exists"
+          else
+            echo "::error::Domain test2.local not found"
+            exit 1
+          fi
+          
+          echo ""
+          echo "=== Verifying Users ==="
+          USERS_RESPONSE=$(curl -s -u "admin:$ADMIN_PASSWORD" \
+            "http://localhost:8080/api/principal?types=individual&limit=100")
+          
+          USER_COUNT=$(echo "$USERS_RESPONSE" | jq '.data.total // 0')
+          echo "Total users found: $USER_COUNT"
+          
+          # List users
+          echo "$USERS_RESPONSE" | jq -r '.data.items[] | "  - \(.name) (\(.emails[0])): roles=\(.roles)"'
+          
+          # Verify we have at least the 3 users we created
+          if [ "$USER_COUNT" -lt 3 ]; then
+            echo "::error::Expected at least 3 users, found $USER_COUNT"
+            exit 1
+          fi
+          
+          # Verify specific users exist and have correct roles
+          for user_email in "user1@test1.local" "user2@test1.local" "admin@test2.local"; do
+            USER_DATA=$(echo "$USERS_RESPONSE" | jq --arg email "$user_email" '.data.items[] | select(.emails[] == $email)')
+            
+            if [ -z "$USER_DATA" ]; then
+              echo "::error::User $user_email not found"
+              exit 1
+            fi
+            
+            # Check if user has "user" role
+            HAS_USER_ROLE=$(echo "$USER_DATA" | jq '.roles | contains(["user"])')
+            if [ "$HAS_USER_ROLE" = "true" ]; then
+              echo "✓ User $user_email exists with 'user' role"
+            else
+              echo "::error::User $user_email exists but missing 'user' role"
+              exit 1
+            fi
+          done
+          
+          echo ""
+          echo "✓ All domains and users verified successfully"
+    
+      - name: Verify unauthenticated JMAP access
+        run: |
+          echo "Testing unauthenticated JMAP endpoint..."
+          
+          # Call without authentication (follow redirects with -L)
+          HTTP_CODE=$(curl -s -L \
+            -o /tmp/jmap_response_no_auth.json \
+            -w "%{http_code}" \
+            "http://localhost:8080/.well-known/jmap")
+          
+          echo "HTTP Status Code: $HTTP_CODE"
+          echo "JMAP Response:"
+          cat /tmp/jmap_response_no_auth.json
+          echo ""
+          
+          # Check if request succeeded
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::JMAP endpoint returned HTTP $HTTP_CODE for unauthenticated request"
+            cat /tmp/jmap_response_no_auth.json || true
+            exit 1
+          fi
+          
+          # Verify username is empty (no authentication)
+          USERNAME=$(cat /tmp/jmap_response_no_auth.json | jq -r '.username // empty')
+          
+          if [ -z "$USERNAME" ]; then
+            echo "✓ Unauthenticated access returns empty username"
+          else
+            echo "::warning::Expected empty username for unauthenticated request, got '$USERNAME'"
+          fi
+
+      - name: Verify created user can authenticate
+        run: |
+          echo "Testing user authentication via JMAP endpoint..."
+          
+          # Test user1@test1.local authentication (follow redirects with -L)
+          HTTP_CODE=$(curl -s -L \
+            -o /tmp/jmap_response_auth.json \
+            -w "%{http_code}" \
+            -u "user1@test1.local:UserPass123!" \
+            "http://localhost:8080/.well-known/jmap")
+          
+          echo "HTTP Status Code: $HTTP_CODE"
+          echo "JMAP Response:"
+          cat /tmp/jmap_response_auth.json
+          echo ""
+          
+          # Check if request succeeded
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::JMAP endpoint returned HTTP $HTTP_CODE"
+            exit 1
+          fi
+          
+          # Verify username field contains our test user
+          USERNAME=$(cat /tmp/jmap_response_auth.json | jq -r '.username // empty')
+          
+          if [ "$USERNAME" = "user1@test1.local" ]; then
+            echo "✓ User authentication successful: $USERNAME"
+          else
+            echo "::error::Expected username 'user1@test1.local', got '$USERNAME'"
+            exit 1
+          fi
+          
+          # Verify accounts object is not empty (means user is authenticated)
+          ACCOUNTS=$(cat /tmp/jmap_response_auth.json | jq '.accounts // {}')
+          if [ "$ACCOUNTS" != "{}" ]; then
+            echo "✓ User has active accounts"
+          else
+            echo "::error::User accounts are empty (authentication may have failed)"
+            exit 1
+          fi
+      
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          echo "=== Stalwart Service Status ==="
+          if command -v systemctl >/dev/null 2>&1; then
+            sudo systemctl status stalwart --no-pager || true
+          fi
+          
+          echo -e "\n=== Process Status ==="
+          ps aux | grep stalwart || true
+          
+          echo -e "\n=== Stalwart Logs ==="
+          if command -v journalctl >/dev/null 2>&1; then
+            sudo journalctl -u stalwart -n 100 --no-pager || true
+          else
+            sudo tail -n 100 /opt/stalwart/logs/*.log 2>/dev/null || true
+          fi
+          
+          echo -e "\n=== Configuration File ==="
+          sudo cat /opt/stalwart/etc/config.toml || true
+          
+          echo -e "\n=== Network Ports ==="
+          sudo netstat -tuln | grep -E ':(25|587|465|993|8080)' || true
+          sudo ss -tuln | grep -E ':(25|587|465|993|8080)' || true
+
+  # Test error handling
+  test-error-handling:
+    name: Error Handling Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Test invalid JSON (domains)
+        id: test_invalid_domains
+        continue-on-error: true
+        uses: ./
+        with:
+          domains: 'invalid json string'
+      
+      - name: Verify invalid JSON was caught
+        run: |
+          if [ "${{ steps.test_invalid_domains.outcome }}" = "success" ]; then
+            echo "::error::Action should have failed with invalid JSON"
+            exit 1
+          fi
+          echo "✓ Invalid domains JSON was properly rejected"
+      
+      - name: Clean up after failed test
+        if: always()
+        run: |
+          # Stop service
+          if command -v systemctl >/dev/null 2>&1; then
+            sudo systemctl stop stalwart || true
+            sudo systemctl disable stalwart || true
+          fi
+          
+          # Kill process if still running
+          sudo pkill -9 stalwart || true
+          
+          # Remove installation
+          sudo rm -rf /opt/stalwart || true
+
+  # Summary job
+  test-summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [test-basic-install, test-full-config]
+    if: always()
+    
+    steps:
+      - name: Check test results
+        run: |
+          echo "## Test Results Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Basic Install: ${{ needs.test-basic-install.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Full Config: ${{ needs.test-full-config.result }}" >> $GITHUB_STEP_SUMMARY
+          
+          # Fail if any required test failed
+          if [ "${{ needs.test-basic-install.result }}" != "success" ] || \
+             [ "${{ needs.test-full-config.result }}" != "success" ]; then
+            echo "::error::One or more tests failed"
+            exit 1
+          fi
+          
+          echo "✓ All tests passed!"

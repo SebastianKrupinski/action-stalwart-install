@@ -1,0 +1,83 @@
+name: 'Install Stalwart Mail Server'
+description: 'Installs and configures Stalwart email server with optional admin password, domains, and users'
+author: 'Nodarx'
+
+branding:
+  icon: 'mail'
+  color: 'blue'
+
+inputs:
+  domains:
+    description: 'JSON array of domains to create. Example: [{"name":"example.com","description":"Primary domain"}]'
+    required: false
+    default: ''
+  
+  users:
+    description: 'JSON array of users to create. Example: [{"email":"user@example.com","password":"pass123","name":"User Name","quota":1073741824}]'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check prerequisites
+      shell: bash
+      run: |
+        echo "::group::Checking prerequisites"
+        
+        # Check if running as root
+        if [ "$(id -u)" -ne 0 ]; then
+          echo "::error::This action must run as root. Use 'sudo' or run in a container with root privileges."
+          exit 1
+        fi
+        
+        # Check for required commands
+        for cmd in curl jq tar; do
+          if ! command -v $cmd &> /dev/null; then
+            echo "::error::Required command '$cmd' not found. Please install it first."
+            exit 1
+          fi
+        done
+        
+        echo "✓ All prerequisites met"
+        echo "::endgroup::"
+    
+    - name: Install Stalwart Mail Server
+      shell: bash
+      env:
+        STALWART_INSTALL_PATH: '/opt/stalwart'
+      run: |
+        echo "::group::Installing Stalwart Mail Server"
+        chmod +x "${{ github.action_path }}/scripts/install.sh"
+        "${{ github.action_path }}/scripts/install.sh"
+        echo "::endgroup::"
+    
+    - name: Configure Stalwart
+      shell: bash
+      if: ${{ inputs.domains != '' || inputs.users != '' }}
+      env:
+        STALWART_DOMAINS: ${{ inputs.domains }}
+        STALWART_USERS: ${{ inputs.users }}
+        STALWART_INSTALL_PATH: '/opt/stalwart'
+      run: |
+        
+        # Mask user passwords from JSON
+        if [ -n "$STALWART_USERS" ]; then
+          echo "$STALWART_USERS" | jq -r '.[].password // empty' | while read -r pass; do
+            if [ -n "$pass" ]; then
+              echo "::add-mask::$pass"
+            fi
+          done
+        fi
+        
+        echo "::group::Configuring Stalwart"
+        chmod +x "${{ github.action_path }}/scripts/configure.sh"
+        "${{ github.action_path }}/scripts/configure.sh"
+        echo "::endgroup::"
+    
+    - name: Display completion message
+      shell: bash
+      run: |
+        HOSTNAME=$(hostname -f 2>/dev/null || echo "localhost")
+        echo "::notice::🎉 Stalwart Mail Server installation complete!"
+        echo "::notice::Web admin: http://$HOSTNAME:8080/login"
