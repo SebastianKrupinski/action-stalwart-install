@@ -25,10 +25,13 @@ runs:
       run: |
         echo "::group::Checking prerequisites"
         
-        # Check if running as root
+        # Check if running as root or if sudo is available
         if [ "$(id -u)" -ne 0 ]; then
-          echo "::error::This action must run as root. Use 'sudo' or run in a container with root privileges."
-          exit 1
+          if ! command -v sudo &> /dev/null; then
+            echo "::error::This action must run as root or 'sudo' must be available."
+            exit 1
+          fi
+          echo "ℹ Running as non-root user — will use sudo for privileged steps."
         fi
         
         # Check for required commands
@@ -49,7 +52,9 @@ runs:
       run: |
         echo "::group::Installing Stalwart Mail Server"
         chmod +x "${{ github.action_path }}/scripts/install.sh"
-        "${{ github.action_path }}/scripts/install.sh"
+        SUDO=""
+        if [ "$(id -u)" -ne 0 ]; then SUDO="sudo -E"; fi
+        $SUDO "${{ github.action_path }}/scripts/install.sh"
         echo "::endgroup::"
     
     - name: Configure Stalwart
@@ -72,7 +77,9 @@ runs:
         
         echo "::group::Configuring Stalwart"
         chmod +x "${{ github.action_path }}/scripts/configure.sh"
-        "${{ github.action_path }}/scripts/configure.sh"
+        SUDO=""
+        if [ "$(id -u)" -ne 0 ]; then SUDO="sudo -E"; fi
+        $SUDO "${{ github.action_path }}/scripts/configure.sh"
         echo "::endgroup::"
     
     - name: Display completion message

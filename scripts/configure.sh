@@ -58,7 +58,12 @@ main() {
     
     # Save admin password to temp file for testing/debugging (remove in production)
     echo "$current_password" > /tmp/stalwart_admin_password
-    chmod 600 /tmp/stalwart_admin_password
+    # Use 644 so the invoking (non-root) runner user can read the file
+    chmod 644 /tmp/stalwart_admin_password
+    # If invoked via sudo, transfer ownership back to the calling user
+    if [ -n "${SUDO_USER:-}" ]; then
+        chown "$SUDO_USER" /tmp/stalwart_admin_password
+    fi
     
     # Create domains if provided
     if [ -n "$DOMAINS_JSON" ]; then
