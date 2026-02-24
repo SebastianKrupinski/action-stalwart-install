@@ -345,6 +345,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
       
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y jq curl
+      
       - name: Test invalid JSON (domains)
         id: test_invalid_domains
         continue-on-error: true
