@@ -33,9 +33,6 @@ jobs:
     steps:
       - name: Install Stalwart Mail Server
         uses: SebastianKrupinski/action-stalwart-install@v1
-        # This installs with default settings
-        # Web admin: http://localhost:8080/login
-        # Default password: changeme
 ```
 
 ### Full Automated Setup
@@ -88,7 +85,6 @@ jobs:
 
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
-| `admin_password` | No | `changeme` | Admin password for Stalwart web interface. **Use GitHub Secrets!** |
 | `domains` | No | `""` | JSON array of domains to create. See [Domain Schema](#domain-json-schema) |
 | `users` | No | `""` | JSON array of users to create. See [User Schema](#user-json-schema) |
 
@@ -136,25 +132,7 @@ jobs:
 
 ## Usage Examples
 
-### Example 1: Basic Installation Only
-
-Install Stalwart without any configuration. You'll configure it manually via web UI.
-
-```yaml
-- uses: SebastianKrupinski/action-stalwart-install@v1
-```
-
-After installation, access the web admin at `http://your-server:8080/login` with username `admin` and password `changeme`.
-
-### Example 2: Set Admin Password Only
-
-```yaml
-- uses: SebastianKrupinski/action-stalwart-install@v1
-  with:
-    admin_password: ${{ secrets.STALWART_ADMIN_PASSWORD }}
-```
-
-### Example 3: Create Domains Only
+### Example 1: Create Domains Only
 
 ```yaml
 - uses: SebastianKrupinski/action-stalwart-install@v1
@@ -167,7 +145,7 @@ After installation, access the web admin at `http://your-server:8080/login` with
       ]
 ```
 
-### Example 4: Complete Setup with Multiple Users
+### Example 2: Complete Setup with Multiple Users
 
 ```yaml
 - uses: SebastianKrupinski/action-stalwart-install@v1
@@ -203,7 +181,7 @@ After installation, access the web admin at `http://your-server:8080/login` with
       ]
 ```
 
-### Example 5: Using JSON from Files
+### Example 3: Using JSON from Files
 
 Store your configuration in separate files:
 
@@ -221,58 +199,15 @@ Store your configuration in separate files:
 
 ## Security Best Practices
 
-### 🔒 Always Use GitHub Secrets
-
-**NEVER** hardcode passwords in your workflow files!
-
-```yaml
-# ❌ WRONG - Password visible in repository
-- uses: SebastianKrupinski/action-stalwart-install@v1
-  with:
-    admin_password: "MyPassword123"
-
-# ✅ CORRECT - Password stored in GitHub Secrets
-- uses: SebastianKrupinski/action-stalwart-install@v1
-  with:
-    admin_password: ${{ secrets.STALWART_ADMIN_PASSWORD }}
-```
-
-### Setting Up GitHub Secrets
-
-1. Go to your repository → **Settings** → **Secrets and variables** → **Actions**
-2. Click **New repository secret**
-3. Add your secrets:
-   - `STALWART_ADMIN_PASSWORD`
-   - `USER1_PASSWORD`
-   - `USER2_PASSWORD`
-   - etc.
-
-### Password Requirements
-
-- Use strong, unique passwords (16+ characters)
-- Include uppercase, lowercase, numbers, and symbols
-- Never reuse passwords across services
-- Rotate passwords regularly
-
-### Additional Security Tips
-
-- Restrict Stalwart web admin to localhost or VPN
-- Configure firewall rules (ports 25, 465, 587, 993, 8080)
-- Enable TLS/SSL for all email protocols
-- Regularly update Stalwart to latest version
-- Monitor logs for suspicious activity
-- Use fail2ban or similar intrusion prevention
-
 ## How It Works
 
 1. **Prerequisites Check**: Validates root access and required commands (`curl`, `jq`, `tar`)
 2. **Installation**: Downloads and installs Stalwart Mail Server binary
 3. **Service Setup**: Creates system user and service (systemd/init.d/launchd)
 4. **API Wait**: Waits for Stalwart API to become available (up to 60 seconds)
-5. **Authentication**: Authenticates with default password (`changeme`)
-6. **Password Update**: Changes admin password if provided
-7. **Domain Creation**: Creates domains via REST API
-8. **User Creation**: Creates users with passwords and quotas via REST API
+5. **Password Update**: Changes admin password if provided
+6. **Domain Creation**: Creates domains via REST API
+7. **User Creation**: Creates users with passwords and quotas via REST API
 
 ## Troubleshooting
 
@@ -367,65 +302,6 @@ After installation, Stalwart's web admin is available at `http://localhost:8080/
 - Configure spam filters and antivirus
 - Manage additional domains and users
 - View logs and statistics
-
-## Service Management
-
-### Check Service Status
-
-```bash
-# Systemd (most Linux distributions)
-sudo systemctl status stalwart
-
-# Init.d (older systems)
-sudo service stalwart status
-
-# macOS
-sudo launchctl list | grep stalwart
-```
-
-### Restart Service
-
-```bash
-# Systemd
-sudo systemctl restart stalwart
-
-# Init.d
-sudo service stalwart restart
-
-# macOS
-sudo launchctl stop system/stalwart.mail
-sudo launchctl start system/stalwart.mail
-```
-
-### View Logs
-
-```bash
-# Systemd
-sudo journalctl -u stalwart -f
-
-# Traditional logs
-sudo tail -f /opt/stalwart/logs/*.log
-```
-
-## Uninstallation
-
-To remove Stalwart:
-
-```bash
-# Stop service
-sudo systemctl stop stalwart
-sudo systemctl disable stalwart
-
-# Remove service file
-sudo rm /etc/systemd/system/stalwart.service
-sudo systemctl daemon-reload
-
-# Remove installation directory
-sudo rm -rf /opt/stalwart
-
-# Remove system user (optional)
-sudo userdel stalwart
-```
 
 ## Contributing
 
