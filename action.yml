@@ -1,5 +1,5 @@
 name: 'Install Stalwart Mail Server'
-description: 'Installs and configures Stalwart email server with optional admin password, domains, and users'
+description: 'Starts a throwaway Stalwart server for testing and creates its domains and user accounts'
 author: 'Nodarx'
 
 branding:
@@ -7,84 +7,85 @@ branding:
   color: 'blue'
 
 inputs:
+  version:
+    description: 'Stalwart server release'
+    required: false
+    default: 'v1.1.1'
+
+  cli-version:
+    description: 'stalwart-cli release used to create the domains and accounts'
+    required: false
+    default: 'v2.0.0'
+
+  url:
+    description: 'Base URL the server publishes in its JMAP session and discovery documents. The server listens for HTTP on port 8080.'
+    required: false
+    default: 'http://localhost:8080'
+
+  hostname:
+    description: 'Server hostname. Defaults to mail.<first domain>.'
+    required: false
+    default: ''
+
+  admin-user:
+    description: 'Administrator name'
+    required: false
+    default: 'admin'
+
+  admin-password:
+    description: 'Administrator password'
+    required: false
+    default: 'secretpassword'
+
   domains:
-    description: 'JSON array of domains to create. Example: [{"name":"example.com","description":"Primary domain"}]'
+    description: 'JSON array of domains to create. Example: [{"name":"example.com","description":"Primary domain"}]. Domains of user addresses are created even when not listed.'
     required: false
-    default: ''
-  
+    default: '[]'
+
   users:
-    description: 'JSON array of users to create. Example: [{"email":"user@example.com","password":"pass123","name":"User Name","quota":1073741824}]'
+    description: 'JSON array of users to create. Example: [{"email":"user@example.com","password":"violet-harbor-cactus-lantern","name":"User Name","quota":1073741824}]. Passwords must satisfy the default password policy.'
+    required: false
+    default: '[]'
+
+  directory:
+    description: 'Directory for the binaries, configuration, data store and log. Defaults to stalwart in the runner temporary directory.'
     required: false
     default: ''
+
+outputs:
+  url:
+    description: 'Base URL the server publishes'
+    value: ${{ inputs.url }}
+  directory:
+    description: 'Directory holding the binaries, configuration, data store and log'
+    value: ${{ steps.start.outputs.directory }}
+  cli:
+    description: 'Path to stalwart-cli, for further changes with the administrator credentials'
+    value: ${{ steps.start.outputs.directory }}/bin/stalwart-cli
+  log:
+    description: 'Path to the server log'
+    value: ${{ steps.start.outputs.directory }}/server.log
 
 runs:
   using: 'composite'
   steps:
-    - name: Check prerequisites
-      shell: bash
-      run: |
-        echo "::group::Checking prerequisites"
-        
-        # Check if running as root or if sudo is available
-        if [ "$(id -u)" -ne 0 ]; then
-          if ! command -v sudo &> /dev/null; then
-            echo "::error::This action must run as root or 'sudo' must be available."
-            exit 1
-          fi
-          echo "ℹ Running as non-root user — will use sudo for privileged steps."
-        fi
-        
-        # Check for required commands
-        for cmd in curl jq tar; do
-          if ! command -v $cmd &> /dev/null; then
-            echo "::error::Required command '$cmd' not found. Please install it first."
-            exit 1
-          fi
-        done
-        
-        echo "✓ All prerequisites met"
-        echo "::endgroup::"
-    
-    - name: Install Stalwart Mail Server
+    - name: Start Stalwart
+      id: start
       shell: bash
       env:
-        STALWART_INSTALL_PATH: '/opt/stalwart'
-      run: |
-        echo "::group::Installing Stalwart Mail Server"
-        chmod +x "${{ github.action_path }}/scripts/install.sh"
-        SUDO=""
-        if [ "$(id -u)" -ne 0 ]; then SUDO="sudo -E"; fi
-        $SUDO "${{ github.action_path }}/scripts/install.sh"
-        echo "::endgroup::"
-    
-    - name: Configure Stalwart
-      shell: bash
-      if: ${{ inputs.domains != '' || inputs.users != '' }}
-      env:
+        STALWART_VERSION: ${{ inputs.version }}
+        STALWART_CLI_VERSION: ${{ inputs.cli-version }}
+        STALWART_URL: ${{ inputs.url }}
+        STALWART_HOSTNAME: ${{ inputs.hostname }}
+        STALWART_ADMIN_USER: ${{ inputs.admin-user }}
+        STALWART_ADMIN_PASSWORD: ${{ inputs.admin-password }}
         STALWART_DOMAINS: ${{ inputs.domains }}
         STALWART_USERS: ${{ inputs.users }}
-        STALWART_INSTALL_PATH: '/opt/stalwart'
+        STALWART_DIR: ${{ inputs.directory || format('{0}/stalwart', runner.temp) }}
       run: |
-        
-        # Mask user passwords from JSON
-        if [ -n "$STALWART_USERS" ]; then
-          echo "$STALWART_USERS" | jq -r '.[].password // empty' | while read -r pass; do
-            if [ -n "$pass" ]; then
-              echo "::add-mask::$pass"
-            fi
-          done
-        fi
-        
-        echo "::group::Configuring Stalwart"
-        chmod +x "${{ github.action_path }}/scripts/configure.sh"
-        SUDO=""
-        if [ "$(id -u)" -ne 0 ]; then SUDO="sudo -E"; fi
-        $SUDO "${{ github.action_path }}/scripts/configure.sh"
-        echo "::endgroup::"
-    
-    - name: Display completion message
-      shell: bash
-      run: |
-        HOSTNAME=$(hostname -f 2>/dev/null || echo "localhost")
-        echo "::notice::🎉 Stalwart Mail Server installation complete!"
-        echo "::notice::Web admin: http://$HOSTNAME:8080/login"
+        echo "::add-mask::$STALWART_ADMIN_PASSWORD"
+        echo "$STALWART_USERS" | jq -r '.[]?.password // empty' 2> /dev/null | while read -r password; do
+          echo "::add-mask::$password"
+        done
+        echo "directory=$STALWART_DIR" >> "$GITHUB_OUTPUT"
+        "${{ github.action_path }}/scripts/start.sh"
