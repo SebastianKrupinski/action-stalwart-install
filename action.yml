@@ -1,5 +1,5 @@
 name: 'Install Stalwart Mail Server'
-description: 'Starts a throwaway Stalwart server for testing and creates its domains and user accounts'
+description: 'Starts a throwaway Stalwart server for development and testing and creates its domains and user accounts'
 author: 'Nodarx'
 
 branding:

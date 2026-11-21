@@ -20,6 +20,10 @@
 # Domains of user addresses are created even when not listed in STALWART_DOMAINS.
 # Running it again reuses a running server and applies the domains and users again.
 # Stop it with: kill "$(cat "$STALWART_DIR/server.pid")"
+#
+# The server is for development and tests, not for mail: the limits that guard a real
+# server are lifted, and IMAP (143) and submission (587) are offered with STARTTLS next
+# to their implicit TLS ports (993, 465).
 
 set -euo pipefail
 
@@ -37,7 +41,37 @@ local_url=http://127.0.0.1:8080
 say() { echo "$*"; }
 fail() { echo "::error::$*" >&2; exit 1; }
 
-for command in curl jq tar xz sha256sum timeout; do
+# The server process is running unless it is gone or a zombie: where nothing reaps exited
+# processes (containers without an init), a stopped server stays behind as a zombie
+running() {
+    [ -f "$dir/server.pid" ] && ps -o stat= -p "$(cat "$dir/server.pid")" 2> /dev/null | grep -qv '^Z'
+}
+
+start_server() {
+    $sudo env STALWART_RECOVERY_ADMIN="$admin_user:$admin_password" STALWART_PUBLIC_URL="$url" \
+        nohup "$dir/bin/stalwart" --config "$dir/config.json" >> "$dir/server.log" 2>&1 &
+    echo $! > "$dir/server.pid"
+
+    if ! timeout 60 sh -c "until curl -sf '$local_url/healthz/ready' > /dev/null; do sleep 1; done"; then
+        cat "$dir/server.log" >&2
+        fail "Stalwart did not become ready"
+    fi
+}
+
+stop_server() {
+    local pid
+    pid=$(cat "$dir/server.pid")
+    $sudo kill "$pid"
+    timeout 30 sh -c "while ps -o stat= -p $pid 2> /dev/null | grep -qv '^Z'; do sleep 1; done" \
+        || fail "Stalwart did not stop"
+}
+
+cli() {
+    STALWART_URL=$local_url STALWART_USER=$admin_user STALWART_PASSWORD=$admin_password \
+        "$dir/bin/stalwart-cli" --no-color "$@"
+}
+
+for command in curl jq ps tar xz sha256sum timeout; do
     command -v "$command" > /dev/null || fail "Required command '$command' not found"
 done
 
@@ -84,19 +118,13 @@ fi
 
 # With a configuration file naming the data store, Stalwart skips bootstrap mode and
 # starts with default settings, which the plan below completes
-if [ -f "$dir/server.pid" ] && $sudo kill -0 "$(cat "$dir/server.pid")" 2> /dev/null; then
+if running; then
     say "Stalwart is already running (pid $(cat "$dir/server.pid"))"
 else
     say "Starting Stalwart"
     printf '{"@type":"RocksDb","path":"%s/"}\n' "$dir/data" > "$dir/config.json"
-    $sudo env STALWART_RECOVERY_ADMIN="$admin_user:$admin_password" STALWART_PUBLIC_URL="$url" \
-        nohup "$dir/bin/stalwart" --config "$dir/config.json" > "$dir/server.log" 2>&1 &
-    echo $! > "$dir/server.pid"
-fi
-
-if ! timeout 60 sh -c "until curl -sf '$local_url/healthz/ready' > /dev/null; do sleep 1; done"; then
-    cat "$dir/server.log" >&2
-    fail "Stalwart did not become ready"
+    : > "$dir/server.log"
+    start_server
 fi
 
 # One plan: the domains (listed, then those of user addresses), the default domain
@@ -130,8 +158,37 @@ jq -nc --argjson domains "$domains" --argjson users "$users" --arg hostname "${S
 
 if [ -s "$dir/plan.ndjson" ]; then
     say "Creating domains and accounts"
-    STALWART_URL=$local_url STALWART_USER=$admin_user STALWART_PASSWORD=$admin_password \
-        "$dir/bin/stalwart-cli" apply --file "$dir/plan.ndjson" --no-color --quiet
+    cli apply --file "$dir/plan.ndjson" --quiet
+fi
+
+# Tests send many messages and requests in quick succession: the inbound SMTP throttles
+# (5 connections a second from one address, 25 messages an hour from a sender domain to a
+# recipient) and the IMAP limits per account (2000 requests a minute, 16 connections at
+# once) are lifted
+say "Lifting the limits meant for a real server"
+for id in $(cli query MtaInboundThrottle --json | jq -r '.id'); do
+    cli update MtaInboundThrottle "$id" --field enable=false > /dev/null
+done
+cli update Imap --json '{"rateLimit":null,"maxConcurrentConnections":null}' > /dev/null
+
+# IMAP and submission with STARTTLS; a new listener binds when the server starts, so the
+# server is restarted once they are added, which applies the settings above as well
+listeners=$(cli query NetworkListener --json | jq -r '.name')
+added=false
+for listener in imap:143:imap submission:587:smtp; do
+    IFS=: read -r name port protocol <<< "$listener"
+    if ! grep -qx "$name" <<< "$listeners"; then
+        cli create NetworkListener --json "{\"name\":\"$name\",\"bind\":{\"[::]:$port\":true},\"protocol\":\"$protocol\",\"implicitTls\":false,\"useTls\":true}" > /dev/null
+        added=true
+    fi
+done
+
+if $added; then
+    say "Restarting Stalwart to open IMAP (143) and submission (587) with STARTTLS"
+    stop_server
+    start_server
+else
+    cli create Action --json '{"@type":"ReloadSettings"}' > /dev/null
 fi
 
 say "Stalwart is ready at $url"

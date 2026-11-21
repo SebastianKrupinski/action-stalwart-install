@@ -1,6 +1,6 @@
 # Stalwart Mail Server Action
 
-Starts a throwaway [Stalwart](https://stalw.art/) server for testing, and creates its domains and user accounts.
+Starts a throwaway [Stalwart](https://stalw.art/) server for development and testing, and creates its domains and user accounts.
 
 The action downloads a pinned Stalwart release and `stalwart-cli`, checks both against the digests their releases publish, starts the server with its own data store, and creates the domains and accounts with `stalwart-cli apply`. The server is ready to use when the step completes.
 
@@ -56,9 +56,12 @@ Domains of user addresses are created even when they are not listed in `domains`
 
 ## Notes
 
-- The server also opens the mail ports (25, 465, 993, 995, 4190), so it runs with `sudo` when the job is not root.
-- Running the action again in the same job reuses the server and applies the domains and users again.
-- The server starts from a configuration file naming its data store, so it never enters bootstrap mode and needs no restart.
+- The server is set up for development and tests, not for mail:
+  - the limits that guard a real server are lifted: the inbound SMTP throttles (5 connections a second from one address, 25 messages an hour from a sender domain to a recipient) and the IMAP limits per account (2000 requests a minute, 16 connections at once), as tests send many messages and requests in quick succession;
+  - IMAP and submission are offered both with implicit TLS (993, 465) and with STARTTLS (143, 587). Logins and authentication need TLS either way.
+- The server also opens the mail ports (25, 143, 465, 587, 993, 995, 4190), so it runs with `sudo` when the job is not root.
+- Running the action again in the same job reuses the server and applies the domains, users and settings again.
+- The server starts from a configuration file naming its data store, so it never enters bootstrap mode. On its first start it is restarted once, as the STARTTLS listeners bind when the server starts.
 
 ## Running it locally
 
